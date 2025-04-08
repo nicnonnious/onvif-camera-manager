@@ -15,6 +15,8 @@ app.secret_key = secrets.token_hex(16)  # Generate a random secret key for sessi
 cameras = {}
 last_discovery_time = None
 default_credentials = None
+active_streams = {}  # Store active stream objects
+stream_lock = threading.Lock()  # Add thread lock for stream operations
 
 def discover_and_update_cameras():
     """Discover cameras and update the global cameras dictionary"""
@@ -50,25 +52,62 @@ def discover_and_update_cameras():
 
 def get_camera_stream(ip):
     """Generator function to stream camera feed"""
+    global active_streams
+    
     rtsp_url = cameras[ip].get('rtsp_url')
     if not rtsp_url:
         return
     
-    cap = cv2.VideoCapture(rtsp_url)
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # Convert frame to JPEG
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame = buffer.tobytes()
-        
-        # Return frame in multipart response
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    with stream_lock:
+        # Check if there's already an active stream for this camera
+        if ip in active_streams:
+            try:
+                active_streams[ip]['cap'].release()  # Release existing stream
+            except:
+                pass  # Ignore errors during release
+            del active_streams[ip]
     
-    cap.release()
+        cap = cv2.VideoCapture(rtsp_url)
+        if not cap.isOpened():
+            cameras[ip]['connected'] = False
+            cameras[ip]['status'] = 'error'
+            cameras[ip]['error_message'] = 'Failed to open stream'
+            return
+            
+        active_streams[ip] = {
+            'cap': cap,
+            'active': True
+        }
+    
+    try:
+        while True:
+            with stream_lock:
+                if ip not in active_streams or not active_streams[ip]['active']:
+                    break
+                cap = active_streams[ip]['cap']
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Convert frame to JPEG
+                ret, buffer = cv2.imencode('.jpg', frame)
+                if not ret:
+                    break
+                frame = buffer.tobytes()
+            
+            # Return frame in multipart response
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    finally:
+        with stream_lock:
+            if ip in active_streams:
+                try:
+                    active_streams[ip]['cap'].release()
+                except:
+                    pass  # Ignore errors during release
+                del active_streams[ip]
+            cameras[ip]['connected'] = False
+            cameras[ip]['status'] = 'discovered'
 
 @app.route('/')
 def index():
@@ -128,6 +167,16 @@ def api_connect():
     if ip not in cameras:
         return jsonify({"status": "error", "message": "Camera not found"})
     
+    # First stop any existing stream
+    with stream_lock:
+        if ip in active_streams:
+            try:
+                active_streams[ip]['active'] = False
+                active_streams[ip]['cap'].release()
+                del active_streams[ip]
+            except:
+                pass
+    
     try:
         rtsp_url = get_rtsp_url(ip, username, password)
         if rtsp_url:
@@ -136,8 +185,12 @@ def api_connect():
             cameras[ip]['status'] = 'connected'
             cameras[ip]['username'] = username
             cameras[ip]['password'] = password
+            cameras[ip].pop('error_message', None)  # Clear any error message
             return jsonify({"status": "success", "rtsp_url": rtsp_url})
         else:
+            cameras[ip]['status'] = 'error'
+            cameras[ip]['connected'] = False
+            cameras[ip]['error_message'] = "Failed to get RTSP URL from camera"
             return jsonify({"status": "error", "message": "Failed to get RTSP URL from camera"})
     except Exception as e:
         cameras[ip]['status'] = 'error'
@@ -151,13 +204,29 @@ def api_connect():
 @app.route('/api/stream/<ip>')
 def api_stream(ip):
     """API endpoint to stream camera feed"""
-    if ip not in cameras or not cameras[ip].get('connected'):
-        return "Camera not connected", 400
+    if ip not in cameras:
+        return jsonify({
+            "status": "error",
+            "message": "Camera not found"
+        }), 404
+        
+    if not cameras[ip].get('connected'):
+        return jsonify({
+            "status": "error",
+            "message": "Camera not connected"
+        }), 400
     
-    return Response(
-        get_camera_stream(ip),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
-    )
+    try:
+        return Response(
+            get_camera_stream(ip),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
+    except Exception as e:
+        print(f"Stream error for {ip}: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": f"Stream error: {str(e)}"
+        }), 500
 
 @app.route('/api/cameras')
 def api_cameras():
@@ -214,6 +283,59 @@ def api_registration_code():
             "status": "error",
             "message": str(e)
         })
+
+@app.route('/api/stop_stream/<ip>', methods=['POST'])
+def stop_stream(ip):
+    """API endpoint to stop a camera stream"""
+    try:
+        with stream_lock:
+            # Check if camera exists
+            if ip not in cameras:
+                return jsonify({
+                    "status": "error",
+                    "message": "Camera not found"
+                }), 404
+
+            # Stop the stream if active
+            if ip in active_streams:
+                try:
+                    # Mark stream as inactive first
+                    active_streams[ip]['active'] = False
+                    # Then release the capture
+                    active_streams[ip]['cap'].release()
+                except Exception as e:
+                    print(f"Error releasing stream for {ip}: {str(e)}")
+                finally:
+                    del active_streams[ip]
+
+            # Update camera status regardless of whether stream was active
+            cameras[ip]['connected'] = False
+            cameras[ip]['status'] = 'discovered'
+            cameras[ip].pop('error_message', None)  # Clear any error message
+            
+            return jsonify({
+                "status": "success",
+                "message": "Stream stopped successfully"
+            })
+    except Exception as e:
+        print(f"Error stopping stream for {ip}: {str(e)}")
+        # Attempt to clean up even if there was an error
+        try:
+            with stream_lock:
+                if ip in active_streams:
+                    active_streams[ip]['active'] = False
+                    active_streams[ip]['cap'].release()
+                    del active_streams[ip]
+                if ip in cameras:
+                    cameras[ip]['connected'] = False
+                    cameras[ip]['status'] = 'discovered'
+        except:
+            pass
+        
+        return jsonify({
+            "status": "error",
+            "message": f"Failed to stop stream: {str(e)}"
+        }), 500
 
 if __name__ == '__main__':
     # Start discovery thread

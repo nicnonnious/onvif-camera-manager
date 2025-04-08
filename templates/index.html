@@ -218,16 +218,21 @@
                         }
                         <div class="camera-controls">
                             <div class="d-flex gap-2 justify-content-center">
-                                <button class="btn btn-sm btn-primary" onclick="showConnectModal('${camera.ip}')">
-                                    <i class="fas fa-plug me-1"></i>
-                                    Connect
-                                </button>
                                 ${camera.connected ? `
+                                    <button class="btn btn-sm btn-danger" onclick="stopStream('${camera.ip}')">
+                                        <i class="fas fa-stop me-1"></i>
+                                        Stop Stream
+                                    </button>
                                     <button class="btn btn-sm btn-success" onclick="showRegistrationModal('${camera.ip}')">
                                         <i class="fas fa-qrcode me-1"></i>
                                         Get Registration Code
                                     </button>
-                                ` : ''}
+                                ` : `
+                                    <button class="btn btn-sm btn-primary" onclick="showConnectModal('${camera.ip}')">
+                                        <i class="fas fa-plug me-1"></i>
+                                        Connect
+                                    </button>
+                                `}
                             </div>
                         </div>
                     </div>
@@ -344,6 +349,39 @@
             });
             
             registrationModal.show();
+        }
+
+        function stopStream(ip) {
+            fetch(`/api/stop_stream/${ip}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                // Check if the response is JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new TypeError("Expected JSON response but got " + contentType);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.status === 'success') {
+                    updateCameraGrid();
+                } else {
+                    showError('Failed to stop stream: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showError('Failed to stop stream. Please try again.');
+                // Force update the camera grid to refresh the state
+                updateCameraGrid();
+            });
         }
 
         function copyToClipboard(elementId) {
