@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+.venv
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# Flask
+instance/
+.webassets-cache
+flask_session/
+
+# Project specific
+*.log
+logs/
+*.db
+*.sqlite3
+.env.local
+.env.*.local
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
+
+# Debug files
+*.log
+*.debug
+debug/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Video/Stream files that might be created during testing
+*.mp4
+*.avi
+*.mkv
+*.stream
+*.rtsp
+
+# Certificate files
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+
+# Backup files
+*.bak
+*.backup
+*~ 

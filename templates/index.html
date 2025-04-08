@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ONVIF Camera Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .camera-card {
+            transition: transform 0.2s;
+        }
+        .camera-card:hover {
+            transform: translateY(-5px);
+        }
+        .stream-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+        }
+        .stream-container img {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .status-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1;
+        }
+        .camera-controls {
+            position: absolute;
+            bottom: 10px;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            display: none;
+        }
+        .camera-card:hover .camera-controls {
+            display: block;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-video me-2"></i>
+                ONVIF Camera Manager
+            </a>
+            <div class="d-flex align-items-center">
+                <span class="text-light me-4">
+                    <i class="fas fa-user me-2"></i>
+                    <small>Default Username: <code class="text-info">{{ request.form.get('username', 'admin') }}</code></small>
+                </span>
+                <button class="btn btn-outline-light me-2" onclick="discoverCameras()">
+                    <i class="fas fa-sync-alt me-2"></i>
+                    Discover Cameras
+                </button>
+                <a href="{{ url_for('logout') }}" class="btn btn-danger">
+                    <i class="fas fa-sign-out-alt me-2"></i>
+                    Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Error Toast -->
+    <div class="toast-container position-fixed top-0 end-0 p-3">
+        <div id="errorToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header bg-danger text-white">
+                <i class="fas fa-exclamation-circle me-2"></i>
+                <strong class="me-auto">Error</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="errorToastBody">
+            </div>
+        </div>
+    </div>
+
+    <div class="container py-4">
+        <div class="row" id="camera-grid">
+            <!-- Camera cards will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Connect Camera Modal -->
+    <div class="modal fade" id="connectModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Connect to Camera</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="connectForm">
+                        <input type="hidden" id="cameraIp">
+                        <div class="mb-3">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-control" id="username" value="admin">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" id="password" value="1234abcd">
+                        </div>
+                        <div class="alert alert-warning d-none" id="connectError">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="connectToCamera()" id="connectButton">
+                        <span class="spinner-border spinner-border-sm d-none" id="connectSpinner"></span>
+                        Connect
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Registration Code Modal -->
+    <div class="modal fade" id="registrationModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Camera Registration Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning d-none" id="registrationError"></div>
+                    <div id="registrationDetails">
+                        <div class="mb-3">
+                            <label class="form-label">Camera Name</label>
+                            <input type="text" class="form-control" id="cameraName" readonly>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">RTSP URL</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="rtspUrl" readonly>
+                                <button class="btn btn-outline-secondary" onclick="copyToClipboard('rtspUrl')">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Registration Code</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control font-monospace" id="registrationCode" readonly>
+                                <button class="btn btn-outline-secondary" onclick="copyToClipboard('registrationCode')">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                            <small class="text-muted">Copy this code and paste it into your VMS to add the camera.</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let connectModal;
+        let errorToast;
+        let registrationModal;
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            connectModal = new bootstrap.Modal(document.getElementById('connectModal'));
+            errorToast = new bootstrap.Toast(document.getElementById('errorToast'));
+            registrationModal = new bootstrap.Modal(document.getElementById('registrationModal'));
+            updateCameraGrid();
+            setInterval(updateCameraGrid, 30000);
+        });
+
+        function showError(message) {
+            document.getElementById('errorToastBody').textContent = message;
+            errorToast.show();
+        }
+
+        function updateCameraGrid() {
+            fetch('/api/cameras')
+                .then(response => response.json())
+                .then(cameras => {
+                    const grid = document.getElementById('camera-grid');
+                    grid.innerHTML = '';
+                    
+                    Object.values(cameras).forEach(camera => {
+                        const card = createCameraCard(camera);
+                        grid.appendChild(card);
+                    });
+                })
+                .catch(error => showError('Failed to update camera list: ' + error));
+        }
+
+        function createCameraCard(camera) {
+            const col = document.createElement('div');
+            col.className = 'col-md-6 col-lg-4 mb-4';
+            
+            const statusClass = {
+                'discovered': 'bg-info',
+                'connected': 'bg-success',
+                'offline': 'bg-danger',
+                'error': 'bg-warning'
+            }[camera.status] || 'bg-secondary';
+
+            col.innerHTML = `
+                <div class="card camera-card">
+                    <div class="stream-container">
+                        <span class="badge ${statusClass} status-badge">${camera.status}</span>
+                        ${camera.connected ? 
+                            `<img src="/api/stream/${camera.ip}" alt="Camera Stream">` :
+                            `<div class="d-flex align-items-center justify-content-center h-100 bg-dark text-light">
+                                <i class="fas fa-camera fa-3x"></i>
+                            </div>`
+                        }
+                        <div class="camera-controls">
+                            <div class="d-flex gap-2 justify-content-center">
+                                <button class="btn btn-sm btn-primary" onclick="showConnectModal('${camera.ip}')">
+                                    <i class="fas fa-plug me-1"></i>
+                                    Connect
+                                </button>
+                                ${camera.connected ? `
+                                    <button class="btn btn-sm btn-success" onclick="showRegistrationModal('${camera.ip}')">
+                                        <i class="fas fa-qrcode me-1"></i>
+                                        Get Registration Code
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title">Camera ${camera.ip}</h5>
+                        <p class="card-text">
+                            <small class="text-muted">Last seen: ${new Date(camera.last_seen).toLocaleString()}</small>
+                            ${camera.error_message ? 
+                                `<br><small class="text-danger">${camera.error_message}</small>` : 
+                                ''}
+                        </p>
+                    </div>
+                </div>
+            `;
+            
+            return col;
+        }
+
+        function discoverCameras() {
+            fetch('/api/discover', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        updateCameraGrid();
+                    } else {
+                        showError('Discovery failed: ' + data.message);
+                    }
+                })
+                .catch(error => showError('Discovery failed: ' + error));
+        }
+
+        function showConnectModal(ip) {
+            document.getElementById('cameraIp').value = ip;
+            document.getElementById('connectError').classList.add('d-none');
+            document.getElementById('connectSpinner').classList.add('d-none');
+            document.getElementById('connectButton').disabled = false;
+            connectModal.show();
+        }
+
+        function connectToCamera() {
+            const ip = document.getElementById('cameraIp').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('connectError');
+            const spinner = document.getElementById('connectSpinner');
+            const connectButton = document.getElementById('connectButton');
+
+            // Show loading state
+            errorDiv.classList.add('d-none');
+            spinner.classList.remove('d-none');
+            connectButton.disabled = true;
+
+            fetch('/api/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ ip, username, password })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    connectModal.hide();
+                    updateCameraGrid();
+                } else {
+                    errorDiv.textContent = data.message;
+                    errorDiv.classList.remove('d-none');
+                }
+            })
+            .catch(error => {
+                errorDiv.textContent = 'Connection failed: ' + error;
+                errorDiv.classList.remove('d-none');
+            })
+            .finally(() => {
+                // Reset loading state
+                spinner.classList.add('d-none');
+                connectButton.disabled = false;
+            });
+        }
+
+        function showRegistrationModal(ip) {
+            const errorDiv = document.getElementById('registrationError');
+            const detailsDiv = document.getElementById('registrationDetails');
+            
+            errorDiv.classList.add('d-none');
+            detailsDiv.classList.add('d-none');
+            
+            fetch('/api/registration_code', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ 
+                    ip,
+                    username: document.getElementById('username').value,
+                    password: document.getElementById('password').value
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    document.getElementById('cameraName').value = data.camera_name;
+                    document.getElementById('rtspUrl').value = data.rtsp_url;
+                    document.getElementById('registrationCode').value = data.registration_code;
+                    detailsDiv.classList.remove('d-none');
+                } else {
+                    errorDiv.textContent = data.message;
+                    errorDiv.classList.remove('d-none');
+                }
+            })
+            .catch(error => {
+                errorDiv.textContent = 'Failed to generate registration code: ' + error;
+                errorDiv.classList.remove('d-none');
+            });
+            
+            registrationModal.show();
+        }
+
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            element.select();
+            element.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(element.value);
+            
+            // Show a temporary tooltip
+            const button = event.currentTarget;
+            const originalHtml = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-check"></i>';
+            setTimeout(() => {
+                button.innerHTML = originalHtml;
+            }, 1000);
+        }
+    </script>
+</body>
+</html> 
